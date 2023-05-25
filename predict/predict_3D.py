@@ -56,6 +56,16 @@ def create_mask(x_min, x_max, y_min, y_max, z_min, z_max, test_smpl_vertices):
         (test_smpl_vertices[:, 2] >= z_min) & (test_smpl_vertices[:, 2] <= z_max)
     )
     return mask
+def get_distance(first_point, second_point):
+    distance = euclidean(first_point, second_point)
+    return distance
+def get_distances(point, filtered_points):
+    distances = cdist(point, filtered_points)
+    return distances
+
+def get_nearest_index(distances):
+    near = np.argmin(distances)
+    return near
 
 def setup_detectron2_predictors(silhouettes_from='densepose'):
     # Keypoint-RCNN
@@ -317,20 +327,24 @@ def predict_3D(input,
 
 
                 # Вычисление евклидовых расстояний между заданной точкой и filtered_points
-                distances = cdist(shoulder_left, filtered_points)
+                shoulder_distances = get_distances(shoulder_left, filtered_points)
 
                 # Нахождение индекса ближайшей точки
-                nearest_index = np.argmin(distances)
+                shoulder_nearest_index = get_nearest_index(shoulder_distances)
 
                 # Получение ближайшей точки
-                nearest_point = filtered_points[nearest_index]
-                print(nearest_point)
-                distance = euclidean(nearest_point, [0, nearest_point[1],nearest_point[2]])
-                print (distance*2)
+                shoulder_nearest_point = filtered_points[shoulder_nearest_index]
+                print(shoulder_nearest_point)
+
+                shoulder_distance = get_distance(shoulder_nearest_point, [0, shoulder_nearest_point[1],shoulder_nearest_point[2]])
+                print (shoulder_distance*2)
+
+
+
                 ax.scatter(x2, y2, z2, c='r', marker='o')
                 # ax.scatter(x3, y3, z3, c='k', marker='o')
-                ax.scatter(nearest_point[0], nearest_point[1],nearest_point[2], c='k', marker='o')
-                ax.scatter(0, nearest_point[1],nearest_point[2], c='b', marker='o')
+                ax.scatter(shoulder_nearest_point[0], shoulder_nearest_point[1],shoulder_nearest_point[2], c='k', marker='o')
+                ax.scatter(0, shoulder_nearest_point[1],shoulder_nearest_point[2], c='b', marker='o')
 
                 plt.show()
 
