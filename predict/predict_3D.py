@@ -9,6 +9,7 @@ from smplx.lbs import batch_rodrigues
 from detectron2.config import get_cfg
 from detectron2 import model_zoo
 from detectron2.engine import DefaultPredictor
+from scipy.spatial.distance import cdist
 
 from PointRend.point_rend import add_pointrend_config
 from DensePose.densepose import add_densepose_config
@@ -34,7 +35,27 @@ import matplotlib
 # matplotlib.use('agg')
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
+from scipy.spatial.distance import euclidean
 
+def limits(point, eps):
+    # Ограничения по x, y и z
+    x_min = point[:, 0] + eps
+    x_max = 1.5
+    y_min = point[:, 1] - eps
+    y_max = point[:, 1] + eps
+    z_min = point[:, 2] - eps
+    z_max = point[:, 2] + eps
+    return x_min, x_max, y_min, y_max, z_min, z_max
+
+
+def create_mask(x_min, x_max, y_min, y_max, z_min, z_max, test_smpl_vertices):
+    # Создание маски
+    mask = np.where(
+        (test_smpl_vertices[:, 0] >= x_min) & (test_smpl_vertices[:, 0] <= x_max) &
+        (test_smpl_vertices[:, 1] >= y_min) & (test_smpl_vertices[:, 1] <= y_max) &
+        (test_smpl_vertices[:, 2] >= z_min) & (test_smpl_vertices[:, 2] <= z_max)
+    )
+    return mask
 
 def setup_detectron2_predictors(silhouettes_from='densepose'):
     # Keypoint-RCNN
@@ -207,55 +228,24 @@ def predict_3D(input,
                 #kamil_test________________________________
                 test_body_pose = torch.zeros([1, 69], dtype=torch.float32)
 
-                test_body_pose[0][12] = 0.0 # левая нога
-                test_body_pose[0][15] = 0.0  #голова
-                test_body_pose[0][1] = 0.0  # левая стопа?
-                test_body_pose[0][2] = 0.0 #левое бедро
-                test_body_pose[0][3] = 0.0 #правое колено
-                test_body_pose[0][4] = 0.0 #правая стопа
-                test_body_pose[0][11] = 0.0 #колено
-                test_body_pose[0][14] = 0.0 #колено
-                test_body_pose[0][5] = 0.0 #спина
-                test_body_pose[0][8] = 0.0 # прваое бедро
-                test_body_pose[0][7] = 0.0
-                test_body_pose[0][9] = 0.0
-                test_body_pose[0][6] = 0.0
-                test_body_pose[0][10] = 0.0
-                test_body_pose[0][13] = 0.0
-                test_body_pose[0][16] = 0.0
-                test_body_pose[0][17] = 0.0
-                test_body_pose[0][18] = 0.0
-                test_body_pose[0][19] = 0.0
-                test_body_pose[0][20] = 0.0
-                test_body_pose[0][21] = 0.0
-                test_body_pose[0][22] = 0.0
-                test_body_pose[0][23] = 0.0
-                test_body_pose[0][24] = 0.0
-                test_body_pose[0][25] = 0.0
-                test_body_pose[0][26] = 0.0
-                test_body_pose[0][27] = 0.0
-                test_body_pose[0][28] = 0.0
-                test_body_pose[0][29] = 0.0
-                test_body_pose[0][30] = 0.0
-                test_body_pose[0][31] = 0.0
-                test_body_pose[0][32] = 0.0
-                test_body_pose[0][33] = 0.0
-                test_body_pose[0][34] = 0.0
-                test_body_pose[0][35] = 0.0
-                test_body_pose[0][36] = 0.0
-                test_body_pose[0][37] = 0.0
-                # test_body_pose[0][38] = -0.7 #левое
-                test_body_pose[0][39] = 0.0
-                test_body_pose[0][40] = 0.0
-                # test_body_pose[0][41] = 0.7 #правое
-                test_body_pose[0][42] = 0.0
                 test_body_pose[0][50] = 0.7
                 test_body_pose[0][47] = -0.7
 
                 test_reposed_smpl_output = smpl(betas=pred_shape, body_pose=test_body_pose)
                 test_smpl_output = test_reposed_smpl_output.vertices
 
+
                 test_smpl_vertices = test_smpl_output.cpu().detach().numpy()[0]
+
+
+                max_x = np.amax(test_smpl_vertices[:,0])  # Максимальные значения по оси x
+                max_y = np.amax(test_smpl_vertices[:,1])  # Максимальные значения по оси x
+                max_z = np.amax(test_smpl_vertices[:,2])  # Максимальные значения по оси x
+
+                min_x = np.amin(test_smpl_vertices[:, 0])  # Максимальные значения по оси x
+                min_y = np.amin(test_smpl_vertices[:, 1])  # Максимальные значения по оси x
+                min_z = np.amin(test_smpl_vertices[:, 2])  # Максимальные значения по оси x
+
 
                 # for i in range(69):
                 #     test_body_pose = torch.zeros([1, 69], dtype=torch.float32)
@@ -276,40 +266,104 @@ def predict_3D(input,
                 #kamil test end________________________________________
 
                 pred_reposed_smpl_output = smpl(betas=pred_shape)
-                joints = pred_reposed_smpl_output.joints[:,:24,:]
+                #joints = pred_reposed_smpl_output.joints[:,:24,:]
+                joints = test_reposed_smpl_output.joints.numpy()[:,:24,:]
+                shoulder_left = joints[:,16,:]
+                hip_left = joints[:,1,:]
+                print((shoulder_left.shape))
+                shoulder_right = joints[:,17,:]
+                eps = 0.02
 
+                x_min, x_max, y_min, y_max, z_min, z_max = limits(shoulder_left, eps)
+
+
+                # Создание маски
+                mask = create_mask(x_min, x_max, y_min, y_max, z_min, z_max, test_smpl_vertices)
+
+                # Извлечение точек, удовлетворяющих ограничениям
+                filtered_points = test_smpl_vertices[mask]
 
                 print("joints", joints)
                 pred_reposed_vertices = pred_reposed_smpl_output.vertices
 
+                # Создание трехмерного графика
                 fig = plt.figure()
-                ax = fig.add_subplot(111, projection='3d')
-                ax.scatter(joints[:,:, 0], joints[:,:, 1], joints[:,:, 2], c='r', marker='o')
+                ax = fig.add_subplot(projection='3d')
+
+                x = test_smpl_vertices[:, 0]
+                y = test_smpl_vertices[:, 1]
+                z = test_smpl_vertices[:, 2]
+
+                # ax2 = fig.add_subplot(projection='3d')
+
+                x2 = joints[:,:, 0]
+                y2 = joints[:,:, 1]
+                z2 = joints[:,:, 2]
+
+                x3, y3, z3 = filtered_points.T
+                print(x3.shape)
+
+                # Построение точек
+                # ax.scatter(x, y, z)
+
+
+                # Настройка осей
                 ax.set_xlabel('X')
                 ax.set_ylabel('Y')
                 ax.set_zlabel('Z')
-                ax.set_title('3D Joints Visualization')
+                ax.axes.set_xlim3d(left=-1.1, right=1.1)
+                ax.axes.set_ylim3d(bottom=-1.1, top=1.1)
+                ax.axes.set_zlim3d(bottom=-1.1, top=1.1)
 
 
+                # Вычисление евклидовых расстояний между заданной точкой и filtered_points
+                distances = cdist(shoulder_left, filtered_points)
 
-                ax.set_box_aspect([1, 1, 1])  # Set equal aspect ratio for all three axes
-                ax.set_xlim([-1, 1])  # Set x-axis limits
-                ax.set_ylim([-1, 1])  # Set y-axis limits
-                ax.set_zlim([-1, 1])  # Set z-axis limits
+                # Нахождение индекса ближайшей точки
+                nearest_index = np.argmin(distances)
 
-                for i in range(joints.shape[1]):
-                    ax.text(joints[:, i, 0], joints[:, i, 1], joints[:, i, 2], str(i), color='black')
+                # Получение ближайшей точки
+                nearest_point = filtered_points[nearest_index]
+                print(nearest_point)
+                distance = euclidean(nearest_point, [0, nearest_point[1],nearest_point[2]])
+                print (distance*2)
+                ax.scatter(x2, y2, z2, c='r', marker='o')
+                # ax.scatter(x3, y3, z3, c='k', marker='o')
+                ax.scatter(nearest_point[0], nearest_point[1],nearest_point[2], c='k', marker='o')
+                ax.scatter(0, nearest_point[1],nearest_point[2], c='b', marker='o')
 
                 plt.show()
 
-                ax.view_init(elev=90, azim=0)  # Top view
-                plt.savefig('top_view.png')
 
-                ax.view_init(elev=0, azim=0)  # Front view
-                plt.savefig('front_view.png')
 
-                ax.view_init(elev=0, azim=90)  # Side view
-                plt.savefig('side_view.png')
+                # fig = plt.figure()
+                # ax = fig.add_subplot(111, projection='3d')
+                # ax.scatter(joints[:,:, 0], joints[:,:, 1], joints[:,:, 2], c='r', marker='o')
+                # ax.set_xlabel('X')
+                # ax.set_ylabel('Y')
+                # ax.set_zlabel('Z')
+                # ax.set_title('3D Joints Visualization')
+                #
+                #
+                #
+                # ax.set_box_aspect([1, 1, 1])  # Set equal aspect ratio for all three axes
+                # ax.set_xlim([-1, 1])  # Set x-axis limits
+                # ax.set_ylim([-1, 1])  # Set y-axis limits
+                # ax.set_zlim([-1, 1])  # Set z-axis limits
+                #
+                # for i in range(joints.shape[1]):
+                #     ax.text(joints[:, i, 0], joints[:, i, 1], joints[:, i, 2], str(i), color='black')
+                #
+                # plt.show()
+
+                # ax.view_init(elev=90, azim=0)  # Top view
+                # plt.savefig('top_view.png')
+                #
+                # ax.view_init(elev=0, azim=0)  # Front view
+                # plt.savefig('front_view.png')
+                #
+                # ax.view_init(elev=0, azim=90)  # Side view
+                # plt.savefig('side_view.png')
 
 
                 pred_reposed_smpl_output.body_pose.data[0][0] = 1
