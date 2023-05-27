@@ -30,17 +30,19 @@ from utils.label_conversions import convert_multiclass_to_binary_labels, \
     convert_2Djoints_to_gaussian_heatmaps
 from utils.rigid_transform_utils import rot6d_to_rotmat
 
-import matplotlib
-
 # matplotlib.use('agg')
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
 from scipy.spatial.distance import euclidean
 
-def limits(point, eps):
+def limits_for_body_point(point, eps, is_limb):
     # Ограничения по x, y и z
-    x_min = point[:, 0] + eps
-    x_max = 1.5
+    if is_limb:
+        x_min = -0.5
+        x_max = point[:, 0] + eps
+    else:
+        x_min = point[:, 0] + eps
+        x_max = 1.5
     y_min = point[:, 1] - eps
     y_max = point[:, 1] + eps
     z_min = point[:, 2] - eps
@@ -48,7 +50,9 @@ def limits(point, eps):
     return x_min, x_max, y_min, y_max, z_min, z_max
 
 
-def create_mask(x_min, x_max, y_min, y_max, z_min, z_max, test_smpl_vertices):
+def create_mask(point, eps, test_smpl_vertices, is_limb=False):
+    x_min, x_max, y_min, y_max, z_min, z_max = limits_for_body_point(point, eps, is_limb)
+
     # Создание маски
     mask = np.where(
         (test_smpl_vertices[:, 0] >= x_min) & (test_smpl_vertices[:, 0] <= x_max) &
@@ -56,16 +60,60 @@ def create_mask(x_min, x_max, y_min, y_max, z_min, z_max, test_smpl_vertices):
         (test_smpl_vertices[:, 2] >= z_min) & (test_smpl_vertices[:, 2] <= z_max)
     )
     return mask
-def get_distance(first_point, second_point):
-    distance = euclidean(first_point, second_point)
-    return distance
-def get_distances(point, filtered_points):
-    distances = cdist(point, filtered_points)
-    return distances
 
-def get_nearest_index(distances):
-    near = np.argmin(distances)
-    return near
+
+def get_antrophomorh_geatures(vertices, point_value, ax=None):
+    eps = 0.02
+    skeleton_point = point_value["coords"]
+
+    points_mask = create_mask(skeleton_point, eps, vertices)
+    filetered_points = vertices[points_mask]
+    distances = cdist(skeleton_point, filetered_points)
+    nearest_index = np.argmin(distances)
+    nearest_point = filetered_points[nearest_index]
+    if ax is not None:
+        ax.scatter(nearest_point[0], nearest_point[1], nearest_point[2], c='black', marker='o')
+
+    if point_value["is_limb"]:
+        points_mask = create_mask(skeleton_point, eps, vertices, point_value["is_limb"])
+        filetered_points = vertices[points_mask]
+
+        distances = cdist(skeleton_point, filetered_points)
+        nearest_index = np.argmin(distances)
+        second_nearest_point = filetered_points[nearest_index]
+
+        if ax is not None:
+            ax.scatter(second_nearest_point[0], second_nearest_point[1], second_nearest_point[2], c='black', marker='o')
+
+        distance = euclidean(nearest_point, second_nearest_point)
+    else:
+        # получаем расстояние
+        distance = euclidean(nearest_point, [0, nearest_point[1], nearest_point[2]]) * 2
+
+    return distance
+
+
+def create_keypoint_dict(joints):
+    # "name" : {"coords" : [[x,y,z]], "is_limb": bool}
+    keypoints = {}
+    keypoints["hip_left"] = {"coords": joints[:, 1, :], "is_limb": False}
+    keypoints["shoulder_left"] = {"coords": joints[:, 16, :], "is_limb": False}
+    thigh_left = find_mean(joints[:, 1, :], joints[:, 4, :])
+    keypoints["thigh_left"] = {"coords": thigh_left, "is_limb": True}
+    keypoints["nose"] = {"coords": joints[:, 15, :], "is_limb": False}
+    keypoints["waist"] = {"coords": joints[:, 3, :], "is_limb": False}
+    return keypoints
+
+def find_mean(point1, point2):
+    # Получение координат x, y, z для joints[:,1,:] и joints[:,4,:]
+    new_array = np.zeros_like(point1)
+
+    for i in range(3):
+        new_array[:, i] = (point1[:, i] + point2[:, i])/2
+
+    return new_array
+
+
 
 def setup_detectron2_predictors(silhouettes_from='densepose'):
     # Keypoint-RCNN
@@ -102,11 +150,8 @@ def setup_detectron2_predictors(silhouettes_from='densepose'):
     return joints2D_predictor, silhouette_predictor
 
 
-def create_proxy_representation(silhouette,
-                                joints2D,
-                                out_wh):
-    heatmaps = convert_2Djoints_to_gaussian_heatmaps(joints2D.astype(np.int16),
-                                                     out_wh)
+def create_proxy_representation(silhouette, joints2D, out_wh):
+    heatmaps = convert_2Djoints_to_gaussian_heatmaps(joints2D.astype(np.int16), out_wh)
     proxy_rep = np.concatenate([silhouette[:, :, None], heatmaps], axis=-1)
     proxy_rep = np.transpose(proxy_rep, [2, 0, 1])  # (C, out_wh, out_WH)
 
@@ -238,8 +283,11 @@ def predict_3D(input,
                 #kamil_test________________________________
                 test_body_pose = torch.zeros([1, 69], dtype=torch.float32)
 
+                # поднимаем руки
                 test_body_pose[0][50] = 0.7
                 test_body_pose[0][47] = -0.7
+                test_body_pose[0][5] = -1
+
 
                 test_reposed_smpl_output = smpl(betas=pred_shape, body_pose=test_body_pose)
                 test_smpl_output = test_reposed_smpl_output.vertices
@@ -249,12 +297,12 @@ def predict_3D(input,
 
 
                 max_x = np.amax(test_smpl_vertices[:,0])  # Максимальные значения по оси x
-                max_y = np.amax(test_smpl_vertices[:,1])  # Максимальные значения по оси x
-                max_z = np.amax(test_smpl_vertices[:,2])  # Максимальные значения по оси x
+                max_y = np.amax(test_smpl_vertices[:,1])  # Максимальные значения по оси y
+                max_z = np.amax(test_smpl_vertices[:,2])  # Максимальные значения по оси z
 
-                min_x = np.amin(test_smpl_vertices[:, 0])  # Максимальные значения по оси x
-                min_y = np.amin(test_smpl_vertices[:, 1])  # Максимальные значения по оси x
-                min_z = np.amin(test_smpl_vertices[:, 2])  # Максимальные значения по оси x
+                min_x = np.amin(test_smpl_vertices[:, 0])  # Минимальные значения по оси x
+                min_y = np.amin(test_smpl_vertices[:, 1])  # Минимальные значения по оси y
+                min_z = np.amin(test_smpl_vertices[:, 2])  # Минимальные значения по оси z
 
 
                 # for i in range(69):
@@ -275,47 +323,27 @@ def predict_3D(input,
                 # sys.exit()
                 #kamil test end________________________________________
 
-                pred_reposed_smpl_output = smpl(betas=pred_shape)
-                #joints = pred_reposed_smpl_output.joints[:,:24,:]
-                joints = test_reposed_smpl_output.joints.numpy()[:,:24,:]
-                shoulder_left = joints[:,16,:]
-                hip_left = joints[:,1,:]
-                print((shoulder_left.shape))
-                shoulder_right = joints[:,17,:]
-                eps = 0.02
 
-                x_min, x_max, y_min, y_max, z_min, z_max = limits(shoulder_left, eps)
+                joints = test_reposed_smpl_output.joints.numpy()[:,:24,:] # достаем 24 точки скелета
+
+                keypoints = create_keypoint_dict(joints)
 
 
-                # Создание маски
-                mask = create_mask(x_min, x_max, y_min, y_max, z_min, z_max, test_smpl_vertices)
-
-                # Извлечение точек, удовлетворяющих ограничениям
-                filtered_points = test_smpl_vertices[mask]
-
-                print("joints", joints)
-                pred_reposed_vertices = pred_reposed_smpl_output.vertices
 
                 # Создание трехмерного графика
                 fig = plt.figure()
                 ax = fig.add_subplot(projection='3d')
 
-                x = test_smpl_vertices[:, 0]
-                y = test_smpl_vertices[:, 1]
-                z = test_smpl_vertices[:, 2]
-
-                # ax2 = fig.add_subplot(projection='3d')
+                # визуализхация 3д человека
+                # Построение точек
+                # x = test_smpl_vertices[:, 0]
+                # y = test_smpl_vertices[:, 1]
+                # z = test_smpl_vertices[:, 2]
+                # ax.scatter(x, y, z)
 
                 x2 = joints[:,:, 0]
                 y2 = joints[:,:, 1]
                 z2 = joints[:,:, 2]
-
-                x3, y3, z3 = filtered_points.T
-                print(x3.shape)
-
-                # Построение точек
-                # ax.scatter(x, y, z)
-
 
                 # Настройка осей
                 ax.set_xlabel('X')
@@ -325,60 +353,26 @@ def predict_3D(input,
                 ax.axes.set_ylim3d(bottom=-1.1, top=1.1)
                 ax.axes.set_zlim3d(bottom=-1.1, top=1.1)
 
-
-                # Вычисление евклидовых расстояний между заданной точкой и filtered_points
-                shoulder_distances = get_distances(shoulder_left, filtered_points)
-
-                # Нахождение индекса ближайшей точки
-                shoulder_nearest_index = get_nearest_index(shoulder_distances)
-
-                # Получение ближайшей точки
-                shoulder_nearest_point = filtered_points[shoulder_nearest_index]
-                print(shoulder_nearest_point)
-
-                shoulder_distance = get_distance(shoulder_nearest_point, [0, shoulder_nearest_point[1],shoulder_nearest_point[2]])
-                print (shoulder_distance*2)
-
-
-
+                # рисуем основной скелет
                 ax.scatter(x2, y2, z2, c='r', marker='o')
-                # ax.scatter(x3, y3, z3, c='k', marker='o')
-                ax.scatter(shoulder_nearest_point[0], shoulder_nearest_point[1],shoulder_nearest_point[2], c='k', marker='o')
-                ax.scatter(0, shoulder_nearest_point[1],shoulder_nearest_point[2], c='b', marker='o')
+                ax.scatter(0, 0, joints[:, 4, 2], c='k', marker='o')
+                print (joints[:, 4, 2][0])
+
+                head_knee_distance = euclidean([0, 0, joints[:, 15, 2][0]], [0, 0, joints[:, 4, 2][0]])  # нос и колено
+                print("knee-nose distance", head_knee_distance)
+
+
+                for key, value in keypoints.items():
+                    point_distance = get_antrophomorh_geatures(test_smpl_vertices, value, ax)
+                    print(f"Distance {key} = {point_distance}")
+
+
 
                 plt.show()
 
 
-
-                # fig = plt.figure()
-                # ax = fig.add_subplot(111, projection='3d')
-                # ax.scatter(joints[:,:, 0], joints[:,:, 1], joints[:,:, 2], c='r', marker='o')
-                # ax.set_xlabel('X')
-                # ax.set_ylabel('Y')
-                # ax.set_zlabel('Z')
-                # ax.set_title('3D Joints Visualization')
-                #
-                #
-                #
-                # ax.set_box_aspect([1, 1, 1])  # Set equal aspect ratio for all three axes
-                # ax.set_xlim([-1, 1])  # Set x-axis limits
-                # ax.set_ylim([-1, 1])  # Set y-axis limits
-                # ax.set_zlim([-1, 1])  # Set z-axis limits
-                #
-                # for i in range(joints.shape[1]):
-                #     ax.text(joints[:, i, 0], joints[:, i, 1], joints[:, i, 2], str(i), color='black')
-                #
-                # plt.show()
-
-                # ax.view_init(elev=90, azim=0)  # Top view
-                # plt.savefig('top_view.png')
-                #
-                # ax.view_init(elev=0, azim=0)  # Front view
-                # plt.savefig('front_view.png')
-                #
-                # ax.view_init(elev=0, azim=90)  # Side view
-                # plt.savefig('side_view.png')
-
+                pred_reposed_smpl_output = smpl(betas=pred_shape)
+                pred_reposed_vertices = pred_reposed_smpl_output.vertices
 
                 pred_reposed_smpl_output.body_pose.data[0][0] = 1
                 print("----")
