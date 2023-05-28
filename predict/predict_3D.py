@@ -50,8 +50,60 @@ def limits_for_body_point(point, eps, is_limb):
     return x_min, x_max, y_min, y_max, z_min, z_max
 
 
-def create_mask(point, eps, test_smpl_vertices, is_limb=False):
-    x_min, x_max, y_min, y_max, z_min, z_max = limits_for_body_point(point, eps, is_limb)
+def limits_for_area(point_h, point_l, eps, heap_distance):
+    # Ограничения по x, y и z
+    x_min = 0
+    x_max = 1.4 * heap_distance/2
+    z_min = 0 - eps
+    z_max = 0 + eps
+    y_min = point_l[:, 1]
+    y_max = point_h[:, 1]
+
+    return x_min, x_max, y_min, y_max, z_min, z_max
+
+
+def get_area_points(vertices, point_h, point_l, heap_distance, ax=None):
+    eps = 0.02
+    points_mask = create_mask(point_h, eps, vertices, False, point_l, heap_distance)
+    filtered_points = vertices[points_mask]
+    if ax is not None:
+        for filtered_point in filtered_points:
+            ax.scatter(filtered_point[0], filtered_point[1], filtered_point[2], c='green', marker='o')
+
+    return filtered_points
+
+
+def get_line(vertices, point_h, point_l, heap_distance, ax=None):
+    points = get_area_points(vertices, point_h, point_l, heap_distance, ax=None)
+    modified_points = [(point[0], point[1], 0) for point in points]
+    return modified_points
+
+
+def get_area(vertices, point_h, point_l, heap_distance, ax=None):
+
+    points = get_line(vertices, point_h, point_l, heap_distance, ax=None)
+
+    # Сортировка точек по координате z
+    sorted_points = sorted(points, key=lambda point: point[1])
+
+    # Вычисление площади фигуры под ломанной линией
+    area = 0
+    for i in range(len(sorted_points) - 1):
+        x1, y1, z1 = sorted_points[i]
+        x2, y2, z2 = sorted_points[i + 1]
+        base= x1 + x2
+        height = y2 - y1
+        area += (0.5 * base) * height
+        print("area", area)
+
+    # Вывод площади фигуры
+    print("Площадь фигуры под ломанной линией:", area*2)
+
+def create_mask(point, eps, test_smpl_vertices, is_limb=False, point_l = None, heap_distance = None):
+    if point_l is None:
+        x_min, x_max, y_min, y_max, z_min, z_max = limits_for_body_point(point, eps, is_limb)
+    else:
+        x_min, x_max, y_min, y_max, z_min, z_max = limits_for_area(point, point_l, eps, heap_distance)
 
     # Создание маски
     mask = np.where(
@@ -62,25 +114,25 @@ def create_mask(point, eps, test_smpl_vertices, is_limb=False):
     return mask
 
 
-def get_antrophomorh_geatures(vertices, point_value, ax=None):
+def get_antrophomorh_features(vertices, point_value, ax=None):
     eps = 0.02
     skeleton_point = point_value["coords"]
 
     points_mask = create_mask(skeleton_point, eps, vertices)
-    filetered_points = vertices[points_mask]
-    distances = cdist(skeleton_point, filetered_points)
+    filtered_points = vertices[points_mask]
+    distances = cdist(skeleton_point, filtered_points)
     nearest_index = np.argmin(distances)
-    nearest_point = filetered_points[nearest_index]
+    nearest_point = filtered_points[nearest_index]
     if ax is not None:
         ax.scatter(nearest_point[0], nearest_point[1], nearest_point[2], c='black', marker='o')
 
     if point_value["is_limb"]:
         points_mask = create_mask(skeleton_point, eps, vertices, point_value["is_limb"])
-        filetered_points = vertices[points_mask]
+        filtered_points = vertices[points_mask]
 
-        distances = cdist(skeleton_point, filetered_points)
+        distances = cdist(skeleton_point, filtered_points)
         nearest_index = np.argmin(distances)
-        second_nearest_point = filetered_points[nearest_index]
+        second_nearest_point = filtered_points[nearest_index]
 
         if ax is not None:
             ax.scatter(second_nearest_point[0], second_nearest_point[1], second_nearest_point[2], c='black', marker='o')
@@ -286,6 +338,7 @@ def predict_3D(input,
                 # поднимаем руки
                 test_body_pose[0][50] = 0.7
                 test_body_pose[0][47] = -0.7
+                test_body_pose[0][52] = 1
                 test_body_pose[0][5] = -1
 
 
@@ -355,17 +408,19 @@ def predict_3D(input,
 
                 # рисуем основной скелет
                 ax.scatter(x2, y2, z2, c='r', marker='o')
-                ax.scatter(0, 0, joints[:, 4, 2], c='k', marker='o')
+                # ax.scatter(0, joints[:, 4, 2], 0, c='k', marker='o')
                 print (joints[:, 4, 2][0])
 
-                head_knee_distance = euclidean([0, 0, joints[:, 15, 2][0]], [0, 0, joints[:, 4, 2][0]])  # нос и колено
+                head_knee_distance = euclidean([ 0, joints[:, 15, 1][0], 0], [0, joints[:, 4, 1][0], 0])  # нос и колено
                 print("knee-nose distance", head_knee_distance)
 
 
                 for key, value in keypoints.items():
-                    point_distance = get_antrophomorh_geatures(test_smpl_vertices, value, ax)
+                    point_distance = get_antrophomorh_features(test_smpl_vertices, value, ax)
+                    value["distance"] = point_distance
                     print(f"Distance {key} = {point_distance}")
 
+                get_area(test_smpl_vertices, joints[:, 3, :], joints[:, 1, :], keypoints["hip_left"]["distance"], ax)
 
 
                 plt.show()
