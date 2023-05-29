@@ -1,6 +1,6 @@
 import os
 import sys
-
+import json
 import cv2
 import numpy as np
 import torch
@@ -118,10 +118,16 @@ def create_mask(point, eps, test_smpl_vertices, is_limb=False, point_l = None, h
 def get_antrophomorh_features(vertices, point_value, ax=None):
     eps = 0.02
     skeleton_point = point_value["coords"]
-
-    points_mask = create_mask(skeleton_point, eps, vertices)
-    filtered_points = vertices[points_mask]
-    distances = cdist(skeleton_point, filtered_points)
+    print(eps)
+    distances =  np.empty((0,))
+    while distances.size == 0:
+        points_mask = create_mask(skeleton_point, eps, vertices)
+        filtered_points = vertices[points_mask]
+        distances = cdist(skeleton_point, filtered_points)
+        eps += 0.01
+    print(eps)
+    # for point in filtered_points:
+    #     ax.scatter(point[0], point[1], point[2], c='black', marker='o')
     nearest_index = np.argmin(distances)
     nearest_point = filtered_points[nearest_index]
     if ax is not None:
@@ -211,6 +217,71 @@ def create_proxy_representation(silhouette, joints2D, out_wh):
     return proxy_rep
 
 
+def get_features_from_frame(smpl, pred_shape, frame_number, path_to_save):
+    test_body_pose = torch.zeros([1, 69], dtype=torch.float32)
+
+    # поднимаем руки
+    test_body_pose[0][50] = 0.7
+    test_body_pose[0][47] = -0.7
+    test_body_pose[0][52] = 1
+    test_body_pose[0][5] = -1
+
+    test_reposed_smpl_output = smpl(betas=pred_shape, body_pose=test_body_pose)
+    test_smpl_output = test_reposed_smpl_output.vertices
+
+    test_smpl_vertices = test_smpl_output.cpu().detach().numpy()[0]
+
+    joints = test_reposed_smpl_output.joints.numpy()[:, :24, :]  # достаем 24 точки скелета
+
+    keypoints = create_keypoint_dict(joints)
+
+    # Создание трехмерного графика
+    fig = plt.figure()
+    ax = fig.add_subplot(projection='3d')
+
+    # визуализхация 3д человека
+    # Построение точек
+    # x = test_smpl_vertices[:, 0]
+    # y = test_smpl_vertices[:, 1]
+    # z = test_smpl_vertices[:, 2]
+    # ax.scatter(x, y, z)
+
+    x2 = joints[:, :, 0]
+    y2 = joints[:, :, 1]
+    z2 = joints[:, :, 2]
+
+    # Настройка осей
+    ax.set_xlabel('X')
+    ax.set_ylabel('Y')
+    ax.set_zlabel('Z')
+    ax.axes.set_xlim3d(left=-1.1, right=1.1)
+    ax.axes.set_ylim3d(bottom=-1.1, top=1.1)
+    ax.axes.set_zlim3d(bottom=-1.1, top=1.1)
+
+    # рисуем основной скелет
+    ax.scatter(x2, y2, z2, c='r', marker='o')
+
+    head_knee_distance = euclidean([0, joints[:, 15, 1][0], 0], [0, joints[:, 4, 1][0], 0])  # нос и колено
+
+    for key, value in keypoints.items():
+        point_distance = get_antrophomorh_features(test_smpl_vertices, value, ax)
+        value["distance"] = point_distance
+
+    result_values = {}
+    result_values["W2Hp"] = (keypoints["waist"]["distance"]) / (keypoints["hip_left"]["distance"])
+    result_values["W2T"] = (keypoints["waist"]["distance"]) / (keypoints["thigh_left"]["distance"])
+    result_values["W2Hd"] = (keypoints["waist"]["distance"]) / (keypoints["nose"]["distance"])
+    result_values["Hp2Hd"] = (keypoints["hip_left"]["distance"]) / (keypoints["nose"]["distance"])
+    result_values["Area"] = get_area(test_smpl_vertices, joints[:, 3, :], joints[:, 1, :],
+                                     keypoints["hip_left"]["distance"])
+    result_values["H2W"] = (head_knee_distance) / (keypoints["waist"]["distance"])
+    result_values["W2S"] = (keypoints["waist"]["distance"]) / (keypoints["shoulder_left"]["distance"])
+
+    plt.savefig(f'{path_to_save}/frame_{frame_number}.png')
+
+    return result_values
+
+
 def predict_3D(input,
                regressor,
                device,
@@ -231,7 +302,12 @@ def predict_3D(input,
     if os.path.isdir(input):
         image_fnames = [f for f in sorted(os.listdir(input)) if f.endswith('.png') or
                         f.endswith('.jpg')]
+
+        result_antrometric_features = {}
+
+        i = 0
         for fname in image_fnames:
+            i += 1
             print("Predicting on:", fname)
             image = cv2.imread(os.path.join(input, fname))
             # Pre-process for 2D detectors
@@ -333,108 +409,9 @@ def predict_3D(input,
                 pred_vertices2d = undo_keypoint_normalisation(pred_vertices2d,
                                                               proxy_rep_input_wh)
 
-                #kamil_test________________________________
-                test_body_pose = torch.zeros([1, 69], dtype=torch.float32)
-
-                # поднимаем руки
-                test_body_pose[0][50] = 0.7
-                test_body_pose[0][47] = -0.7
-                test_body_pose[0][52] = 1
-                test_body_pose[0][5] = -1
-
-
-                test_reposed_smpl_output = smpl(betas=pred_shape, body_pose=test_body_pose)
-                test_smpl_output = test_reposed_smpl_output.vertices
-
-
-                test_smpl_vertices = test_smpl_output.cpu().detach().numpy()[0]
-
-
-                max_x = np.amax(test_smpl_vertices[:,0])  # Максимальные значения по оси x
-                max_y = np.amax(test_smpl_vertices[:,1])  # Максимальные значения по оси y
-                max_z = np.amax(test_smpl_vertices[:,2])  # Максимальные значения по оси z
-
-                min_x = np.amin(test_smpl_vertices[:, 0])  # Минимальные значения по оси x
-                min_y = np.amin(test_smpl_vertices[:, 1])  # Минимальные значения по оси y
-                min_z = np.amin(test_smpl_vertices[:, 2])  # Минимальные значения по оси z
-
-
-                # for i in range(69):
-                #     test_body_pose = torch.zeros([1, 69], dtype=torch.float32)
-                #     test_body_pose[0][i] = 0.5
-                #     test_reposed_smpl_output = smpl(betas=pred_shape, body_pose=test_body_pose)
-                #
-                #     test_smpl_output = test_reposed_smpl_output.vertices
-                #
-                #     test_smpl_vertices = test_smpl_output.cpu().detach().numpy()[0]
-                #
-                #     rend_reposed_img = wp_renderer.render(verts=test_smpl_vertices,
-                #                                           cam=np.array([0.8, 0., -0.2]),
-                #                                           angle=180,
-                #                                           axis=[1, 0, 0])
-                #     cv2.imwrite(os.path.join(input, 'rend_vis/kamil_test', f'point_{i}_reposed_{fname}'), rend_reposed_img)
-                #
-                # sys.exit()
-                #kamil test end________________________________________
-
-
-                joints = test_reposed_smpl_output.joints.numpy()[:,:24,:] # достаем 24 точки скелета
-
-                keypoints = create_keypoint_dict(joints)
-
-
-
-                # Создание трехмерного графика
-                fig = plt.figure()
-                ax = fig.add_subplot(projection='3d')
-
-                # визуализхация 3д человека
-                # Построение точек
-                # x = test_smpl_vertices[:, 0]
-                # y = test_smpl_vertices[:, 1]
-                # z = test_smpl_vertices[:, 2]
-                # ax.scatter(x, y, z)
-
-                x2 = joints[:,:, 0]
-                y2 = joints[:,:, 1]
-                z2 = joints[:,:, 2]
-
-                # Настройка осей
-                ax.set_xlabel('X')
-                ax.set_ylabel('Y')
-                ax.set_zlabel('Z')
-                ax.axes.set_xlim3d(left=-1.1, right=1.1)
-                ax.axes.set_ylim3d(bottom=-1.1, top=1.1)
-                ax.axes.set_zlim3d(bottom=-1.1, top=1.1)
-
-                # рисуем основной скелет
-                ax.scatter(x2, y2, z2, c='r', marker='o')
-                # ax.scatter(0, joints[:, 4, 2], 0, c='k', marker='o')
-                print (joints[:, 4, 2][0])
-
-                head_knee_distance = euclidean([ 0, joints[:, 15, 1][0], 0], [0, joints[:, 4, 1][0], 0])  # нос и колено
-                print("knee-nose distance", head_knee_distance)
-
-
-                for key, value in keypoints.items():
-                    point_distance = get_antrophomorh_features(test_smpl_vertices, value, ax)
-                    value["distance"] = point_distance
-                    #print(f"Distance {key} = {point_distance}")
-
-                result_values = {}
-                result_values["W2Hp"] = (keypoints["waist"]["distance"])/(keypoints["hip_left"]["distance"])
-                result_values["W2T"] = (keypoints["waist"]["distance"]) / (keypoints["thigh_left"]["distance"])
-                result_values["W2Hd"] = (keypoints["waist"]["distance"]) / (keypoints["nose"]["distance"])
-                result_values["Hp2Hd"] = (keypoints["hip_left"]["distance"]) / (keypoints["nose"]["distance"])
-                result_values["Area"] = get_area(test_smpl_vertices, joints[:, 3, :], joints[:, 1, :], keypoints["hip_left"]["distance"])
-                result_values["H2W"] = (head_knee_distance) / (keypoints["waist"]["distance"])
-                result_values["W2S"] = (keypoints["waist"]["distance"]) / (keypoints["shoulder_left"]["distance"])
-
-                for key, value in result_values.items():
-                    print(f"{key} = {value}")
-
-                plt.show()
-
+                # достаем фичи
+                extracted_features = get_features_from_frame(smpl, pred_shape, fname, "/home/nata/Documents/test_output2")
+                result_antrometric_features[fname] = extracted_features
 
                 pred_reposed_smpl_output = smpl(betas=pred_shape)
                 pred_reposed_vertices = pred_reposed_smpl_output.vertices
@@ -463,14 +440,14 @@ def predict_3D(input,
 
             if render_vis:
                 rend_img = wp_renderer.render(verts=pred_vertices, cam=pred_cam_wp, img=image)
-                # rend_reposed_img = wp_renderer.render(verts=pred_reposed_vertices,
-                #                                       cam=np.array([0.8, 0., -0.2]),
-                #                                       angle=180,
-                #                                       axis=[1, 0, 0])
-                rend_reposed_img = wp_renderer.render(verts=test_smpl_vertices,
-                                                          cam=np.array([0.8, 0., -0.2]),
-                                                          angle=180,
-                                                          axis=[1, 0, 0])
+                rend_reposed_img = wp_renderer.render(verts=pred_reposed_vertices,
+                                                      cam=np.array([0.8, 0., -0.2]),
+                                                      angle=180,
+                                                      axis=[1, 0, 0])
+                # rend_reposed_img = wp_renderer.render(verts=test_smpl_vertices,
+                #                                           cam=np.array([0.8, 0., -0.2]),
+                #                                           angle=180,
+                #                                           axis=[1, 0, 0])
                 if not os.path.isdir(os.path.join(input, 'rend_vis')):
                     os.makedirs(os.path.join(input, 'rend_vis'))
                 cv2.imwrite(os.path.join(input, 'rend_vis', 'rend_' + fname), rend_img)
@@ -482,3 +459,8 @@ def predict_3D(input,
                 cv2.imwrite(os.path.join(input, 'proxy_vis', 'joints2D_' + fname), joints2D_vis)
 
             # sys.exit()
+
+        json_file_path = "/home/nata/Documents/test_output2/data.json"
+        with open(json_file_path, "w") as json_file:
+            # Write the data to the file with indentation and sorting keys
+            json.dump(result_antrometric_features, json_file, indent=4, sort_keys=True)
