@@ -94,10 +94,11 @@ def get_area(vertices, point_h, point_l, heap_distance, ax=None):
         base= x1 + x2
         height = y2 - y1
         area += (0.5 * base) * height
-        print("area", area)
+        # print("area", area)
 
     # Вывод площади фигуры
-    print("Площадь фигуры под ломанной линией:", area*2)
+    #print("Площадь фигуры под ломанной линией:", area*2)
+    return area*2
 
 def create_mask(point, eps, test_smpl_vertices, is_limb=False, point_l = None, heap_distance = None):
     if point_l is None:
@@ -418,10 +419,19 @@ def predict_3D(input,
                 for key, value in keypoints.items():
                     point_distance = get_antrophomorh_features(test_smpl_vertices, value, ax)
                     value["distance"] = point_distance
-                    print(f"Distance {key} = {point_distance}")
+                    #print(f"Distance {key} = {point_distance}")
 
-                get_area(test_smpl_vertices, joints[:, 3, :], joints[:, 1, :], keypoints["hip_left"]["distance"], ax)
+                result_values = {}
+                result_values["W2Hp"] = (keypoints["waist"]["distance"])/(keypoints["hip_left"]["distance"])
+                result_values["W2T"] = (keypoints["waist"]["distance"]) / (keypoints["thigh_left"]["distance"])
+                result_values["W2Hd"] = (keypoints["waist"]["distance"]) / (keypoints["nose"]["distance"])
+                result_values["Hp2Hd"] = (keypoints["hip_left"]["distance"]) / (keypoints["nose"]["distance"])
+                result_values["Area"] = get_area(test_smpl_vertices, joints[:, 3, :], joints[:, 1, :], keypoints["hip_left"]["distance"])
+                result_values["H2W"] = (head_knee_distance) / (keypoints["waist"]["distance"])
+                result_values["W2S"] = (keypoints["waist"]["distance"]) / (keypoints["shoulder_left"]["distance"])
 
+                for key, value in result_values.items():
+                    print(f"{key} = {value}")
 
                 plt.show()
 
@@ -471,4 +481,4 @@ def predict_3D(input,
                 cv2.imwrite(os.path.join(input, 'proxy_vis', 'silhouette_' + fname), silhouette_vis)
                 cv2.imwrite(os.path.join(input, 'proxy_vis', 'joints2D_' + fname), joints2D_vis)
 
-            sys.exit()
+            # sys.exit()
